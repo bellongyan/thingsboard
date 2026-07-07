@@ -18,8 +18,8 @@ package org.thingsboard.server.dao.sql.rpc;
 import com.google.common.util.concurrent.ListenableFuture;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Component;
@@ -49,16 +49,13 @@ import java.util.function.Function;
 @Slf4j
 @Component
 @SqlDao
+@RequiredArgsConstructor
 public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao, TenantEntityDao<Rpc> {
 
-    @Autowired
-    private RpcRepository rpcRepository;
-    @Autowired
-    private RpcUpdateRepository rpcUpdateRepository;
-    @Autowired
-    private ScheduledLogExecutorComponent logExecutor;
-    @Autowired
-    private StatsFactory statsFactory;
+    private final RpcRepository rpcRepository;
+    private final RpcUpdateRepository rpcUpdateRepository;
+    private final ScheduledLogExecutorComponent logExecutor;
+    private final StatsFactory statsFactory;
 
     @Value("${sql.rpc.batch_size:1000}")
     private int batchSize;
