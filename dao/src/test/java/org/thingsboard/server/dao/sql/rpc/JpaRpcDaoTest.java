@@ -39,7 +39,7 @@ public class JpaRpcDaoTest extends AbstractJpaDaoTest {
     JpaRpcDao rpcDao;
 
     @Autowired
-    RpcInsertRepository rpcInsertRepository;
+    RpcUpdateRepository rpcUpdateRepository;
 
     @Test
     public void deleteOutdated() {
@@ -66,19 +66,19 @@ public class JpaRpcDaoTest extends AbstractJpaDaoTest {
     }
 
     @Test
-    public void saveAsyncInsertThenUpsert() throws Exception {
+    public void syncCreateThenAsyncUpdateConvergesToUpdatedStatus() throws Exception {
         UUID id = UUID.randomUUID();
         DeviceId deviceId = new DeviceId(UUID.randomUUID());
 
-        // A create always persists (INSERT ... ON CONFLICT), so the future resolves true.
-        assertThat(rpcDao.createAsync(rpc(id, deviceId, RpcStatus.QUEUED, null)).get(5, TimeUnit.SECONDS)).isTrue();
+        // Production create path: the QUEUED row is persisted synchronously (persist-before-send).
+        rpcDao.saveAndFlush(TenantId.SYS_TENANT_ID, rpc(id, deviceId, RpcStatus.QUEUED, null));
 
         Rpc stored = rpcDao.findById(TenantId.SYS_TENANT_ID, id);
         assertThat(stored).isNotNull();
         assertThat(stored.getStatus()).isEqualTo(RpcStatus.QUEUED);
         assertThat(stored.getResponse()).isNull();
 
-        // The update matches the existing row, so the future resolves true.
+        // The async status update matches the existing row, so the future resolves true.
         assertThat(rpcDao.updateAsync(rpc(id, deviceId, RpcStatus.DELIVERED, JacksonUtil.toJsonNode("{\"ok\":true}")))
                 .get(5, TimeUnit.SECONDS)).isTrue();
 
@@ -88,52 +88,34 @@ public class JpaRpcDaoTest extends AbstractJpaDaoTest {
     }
 
     @Test
-    public void saveAsyncSequentialWritesConvergeToLatestStatus() throws Exception {
-        UUID id = UUID.randomUUID();
-        DeviceId deviceId = new DeviceId(UUID.randomUUID());
-
-        // A create followed by a status update for the same rpcId, both via the async API. Whether the
-        // two land in one flush batch or two is up to the queue's timing and not asserted here (see
-        // saveOrUpdateCoalescedBatchAppliesInOrderAndAlignsResults for the deterministic coalesced case);
-        // either way the final persisted row must converge to DELIVERED, never get stuck at QUEUED.
-        var queuedFuture = rpcDao.createAsync(rpc(id, deviceId, RpcStatus.QUEUED, null));
-        var deliveredFuture = rpcDao.updateAsync(rpc(id, deviceId, RpcStatus.DELIVERED, JacksonUtil.toJsonNode("{\"ok\":true}")));
-        queuedFuture.get(5, TimeUnit.SECONDS);
-        deliveredFuture.get(5, TimeUnit.SECONDS);
-
-        Rpc stored = rpcDao.findById(TenantId.SYS_TENANT_ID, id);
-        assertThat(stored).isNotNull();
-        assertThat(stored.getStatus()).isEqualTo(RpcStatus.DELIVERED);
-        assertThat(stored.getResponse()).isEqualTo(JacksonUtil.toJsonNode("{\"ok\":true}"));
-    }
-
-    @Test
-    public void saveOrUpdateCoalescedBatchAppliesInOrderAndAlignsResults() {
+    public void updateBatchAppliesInOrderAndAlignsResults() {
         DeviceId deviceId = new DeviceId(UUID.randomUUID());
         UUID idA = UUID.randomUUID();
-        UUID idB = UUID.randomUUID(); // never inserted -> its update must report no match
+        UUID idB = UUID.randomUUID(); // never created -> its update must report no match
 
-        // Drive the persist logic directly with a single, deterministically-coalesced flush batch.
-        // This is exactly what "coalescing" means: one saveOrUpdate call carrying several writes for
-        // the same partition in submission order. No queue timing involved.
-        //   index 0: create A (QUEUED)              -> INSERT, always persists -> true
-        //   index 1: update B (SUCCESSFUL)          -> UPDATE for a missing row -> false
-        //   index 2: update A (DELIVERED, {ok:true}) -> UPDATE on the row inserted at index 0 -> true
-        List<RpcQueueEntry> batch = List.of(
-                RpcQueueEntry.forInsert(new RpcEntity(rpc(idA, deviceId, RpcStatus.QUEUED, null))),
-                RpcQueueEntry.forUpdate(new RpcEntity(rpc(idB, deviceId, RpcStatus.SUCCESSFUL, JacksonUtil.toJsonNode("{\"x\":1}")))),
-                RpcQueueEntry.forUpdate(new RpcEntity(rpc(idA, deviceId, RpcStatus.DELIVERED, JacksonUtil.toJsonNode("{\"ok\":true}")))));
+        // Row A exists (persisted synchronously at create time); B was never created.
+        rpcDao.saveAndFlush(TenantId.SYS_TENANT_ID, rpc(idA, deviceId, RpcStatus.QUEUED, null));
 
-        List<Boolean> persisted = rpcInsertRepository.saveOrUpdate(batch);
+        // Drive the persist logic directly with a single, deterministically-coalesced update batch.
+        // This is exactly what "coalescing" means: one update() call carrying several writes for the
+        // same partition in submission order. No queue timing involved.
+        //   index 0: update A (SUCCESSFUL, {ok:true}) -> UPDATE hits the existing row  -> true
+        //   index 1: update B (SUCCESSFUL, {x:1})     -> UPDATE for a missing row      -> false
+        //   index 2: update A (EXPIRED, null response) -> UPDATE hits A, keeps response -> true
+        List<RpcEntity> batch = List.of(
+                new RpcEntity(rpc(idA, deviceId, RpcStatus.SUCCESSFUL, JacksonUtil.toJsonNode("{\"ok\":true}"))),
+                new RpcEntity(rpc(idB, deviceId, RpcStatus.SUCCESSFUL, JacksonUtil.toJsonNode("{\"x\":1}"))),
+                new RpcEntity(rpc(idA, deviceId, RpcStatus.EXPIRED, null)));
 
-        // Booleans are aligned positionally to submission order even though saveOrUpdate runs all
-        // inserts before all updates internally - this guards the updateIdx cursor alignment.
+        List<Boolean> persisted = rpcUpdateRepository.update(batch);
+
+        // Booleans are aligned positionally to submission order.
         assertThat(persisted).containsExactly(true, false, true);
 
-        // Inserts run before updates, so A ends DELIVERED (never stuck at QUEUED)...
+        // Updates apply in order, so A ends EXPIRED, and the null-response update kept the stored response.
         Rpc storedA = rpcDao.findById(TenantId.SYS_TENANT_ID, idA);
         assertThat(storedA).isNotNull();
-        assertThat(storedA.getStatus()).isEqualTo(RpcStatus.DELIVERED);
+        assertThat(storedA.getStatus()).isEqualTo(RpcStatus.EXPIRED);
         assertThat(storedA.getResponse()).isEqualTo(JacksonUtil.toJsonNode("{\"ok\":true}"));
         // ...and the update for a never-created row neither persisted nor resurrected it.
         assertThat(rpcDao.findById(TenantId.SYS_TENANT_ID, idB)).isNull();
@@ -145,7 +127,7 @@ public class JpaRpcDaoTest extends AbstractJpaDaoTest {
         DeviceId deviceId = new DeviceId(UUID.randomUUID());
 
         // Initial create.
-        rpcDao.createAsync(rpc(id, deviceId, RpcStatus.QUEUED, null)).get(5, TimeUnit.SECONDS);
+        rpcDao.saveAndFlush(TenantId.SYS_TENANT_ID, rpc(id, deviceId, RpcStatus.QUEUED, null));
 
         // Delivery timeout with closeTransportSessionOnRpcDeliveryTimeout=true re-queues the RPC: the
         // device actor persists status=QUEUED again as a status update so init() can re-pick it up.
@@ -162,7 +144,7 @@ public class JpaRpcDaoTest extends AbstractJpaDaoTest {
         UUID id = UUID.randomUUID();
         DeviceId deviceId = new DeviceId(UUID.randomUUID());
 
-        rpcDao.createAsync(rpc(id, deviceId, RpcStatus.QUEUED, null)).get(5, TimeUnit.SECONDS);
+        rpcDao.saveAndFlush(TenantId.SYS_TENANT_ID, rpc(id, deviceId, RpcStatus.QUEUED, null));
 
         // A successful response is stored.
         rpcDao.updateAsync(rpc(id, deviceId, RpcStatus.SUCCESSFUL, JacksonUtil.toJsonNode("{\"ok\":true}")))
@@ -181,7 +163,7 @@ public class JpaRpcDaoTest extends AbstractJpaDaoTest {
         UUID id = UUID.randomUUID();
         DeviceId deviceId = new DeviceId(UUID.randomUUID());
 
-        rpcDao.createAsync(rpc(id, deviceId, RpcStatus.QUEUED, null)).get(5, TimeUnit.SECONDS);
+        rpcDao.saveAndFlush(TenantId.SYS_TENANT_ID, rpc(id, deviceId, RpcStatus.QUEUED, null));
 
         // RPC is removed (TTL cleanup / manual delete) while a response is still in flight.
         rpcDao.removeById(TenantId.SYS_TENANT_ID, id);
