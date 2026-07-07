@@ -78,9 +78,8 @@ public class TbRpcServiceTest {
 
         tbRpcService.create(rpc.getTenantId(), rpc);
 
-        // create must persist synchronously via save(...), never via the async batch path
+        // create must persist synchronously via save(...)
         verify(rpcService).save(rpc);
-        verify(rpcService, never()).createAsync(any());
         verify(clusterService, timeout(5000))
                 .pushMsgToRuleEngine(eq(rpc.getTenantId()), eq(rpc.getDeviceId()), any(TbMsg.class), isNull());
     }

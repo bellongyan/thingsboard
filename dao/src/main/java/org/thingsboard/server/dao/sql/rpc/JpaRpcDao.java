@@ -54,7 +54,7 @@ public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao,
     @Autowired
     private RpcRepository rpcRepository;
     @Autowired
-    private RpcInsertRepository rpcInsertRepository;
+    private RpcUpdateRepository rpcUpdateRepository;
     @Autowired
     private ScheduledLogExecutorComponent logExecutor;
     @Autowired
@@ -71,7 +71,7 @@ public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao,
     @Value("${sql.batch_sort:true}")
     private boolean batchSortEnabled;
 
-    private TbSqlBlockingQueueWrapper<RpcQueueEntry, Boolean> queue;
+    private TbSqlBlockingQueueWrapper<RpcEntity, Boolean> queue;
 
     @PostConstruct
     private void init() {
@@ -84,10 +84,10 @@ public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao,
                 .batchSortEnabled(batchSortEnabled)
                 .withResponse(true)
                 .build();
-        Function<RpcQueueEntry, Integer> hashcodeFunction = entry -> entry.entity().getUuid().hashCode();
+        Function<RpcEntity, Integer> hashcodeFunction = entity -> entity.getUuid().hashCode();
         queue = new TbSqlBlockingQueueWrapper<>(params, hashcodeFunction, batchThreads, statsFactory);
-        queue.init(logExecutor, entries -> rpcInsertRepository.saveOrUpdate(entries),
-                Comparator.comparing((RpcQueueEntry entry) -> entry.entity().getUuid()),
+        queue.init(logExecutor, entries -> rpcUpdateRepository.update(entries),
+                Comparator.comparing(RpcEntity::getUuid),
                 Function.identity());
     }
 
@@ -99,13 +99,8 @@ public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao,
     }
 
     @Override
-    public ListenableFuture<Boolean> createAsync(Rpc rpc) {
-        return queue.add(RpcQueueEntry.forInsert(new RpcEntity(rpc)));
-    }
-
-    @Override
     public ListenableFuture<Boolean> updateAsync(Rpc rpc) {
-        return queue.add(RpcQueueEntry.forUpdate(new RpcEntity(rpc)));
+        return queue.add(new RpcEntity(rpc));
     }
 
     @Override
