@@ -634,6 +634,13 @@ actors:
     #   <ul><li> QoS level 0: This feature does not apply, as no acknowledgment is expected, and therefore no timeout is triggered.</li>
     #   <li> QoS level 1: This feature applies, as an acknowledgment is expected.</li>
     #   <li> QoS level 2: Unsupported.</li></ul></li>
+    # <li> For MQTT Gateway (connected sub-devices): the same QoS rules as MQTT transport apply
+    #   (only a QoS level 1 PUBACK triggers a delivery timeout). However, the gateway's own transport
+    #   session is never closed, so the gateway connection and its other sub-devices stay unaffected.
+    #   Only the sub-device session is deregistered and the RPC is reverted to the queued state. It is
+    #   redelivered automatically once the sub-device session is re-registered, which happens on the next
+    #   gateway message for that device (connect, telemetry, or attribute publish): the RPC subscription
+    #   is reapplied and the queued RPC is resent. Until then the RPC remains queued.</li>
     # <li> For CoAP transport:
     #   <ul><li> Confirmable requests: This feature applies, as delivery confirmation is expected.</li>
     #   <li> Non-confirmable requests: This feature does not apply, as no delivery acknowledgment is expected.</li></ul></li>
