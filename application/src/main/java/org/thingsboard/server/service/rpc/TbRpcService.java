@@ -85,7 +85,7 @@ public class TbRpcService {
         DonAsynchron.withCallback(future,
                 persisted -> {
                     if (Boolean.TRUE.equals(persisted)) {
-                        pushRpcMsgToRuleEngine(tenantId, rpc);
+                        notifyRuleEngine(tenantId, rpc);
                     } else {
                         log.debug("[{}][{}][{}] Skipping rule engine notification for status [{}] - RPC row no longer exists",
                                 tenantId, rpc.getDeviceId(), rpc.getId(), rpc.getStatus());

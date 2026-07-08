@@ -18,8 +18,8 @@ package org.thingsboard.server.dao.sql.rpc;
 import com.google.common.util.concurrent.ListenableFuture;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Component;
@@ -49,16 +49,13 @@ import java.util.function.Function;
 @Slf4j
 @Component
 @SqlDao
+@RequiredArgsConstructor
 public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao, TenantEntityDao<Rpc> {
 
-    @Autowired
-    private RpcRepository rpcRepository;
-    @Autowired
-    private RpcInsertRepository rpcInsertRepository;
-    @Autowired
-    private ScheduledLogExecutorComponent logExecutor;
-    @Autowired
-    private StatsFactory statsFactory;
+    private final RpcRepository rpcRepository;
+    private final RpcUpdateRepository rpcUpdateRepository;
+    private final ScheduledLogExecutorComponent logExecutor;
+    private final StatsFactory statsFactory;
 
     @Value("${sql.rpc.batch_size:1000}")
     private int batchSize;
@@ -71,7 +68,7 @@ public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao,
     @Value("${sql.batch_sort:true}")
     private boolean batchSortEnabled;
 
-    private TbSqlBlockingQueueWrapper<RpcQueueEntry, Boolean> queue;
+    private TbSqlBlockingQueueWrapper<RpcEntity, Boolean> queue;
 
     @PostConstruct
     private void init() {
@@ -84,10 +81,10 @@ public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao,
                 .batchSortEnabled(batchSortEnabled)
                 .withResponse(true)
                 .build();
-        Function<RpcQueueEntry, Integer> hashcodeFunction = entry -> entry.entity().getUuid().hashCode();
+        Function<RpcEntity, Integer> hashcodeFunction = entity -> entity.getUuid().hashCode();
         queue = new TbSqlBlockingQueueWrapper<>(params, hashcodeFunction, batchThreads, statsFactory);
-        queue.init(logExecutor, entries -> rpcInsertRepository.saveOrUpdate(entries),
-                Comparator.comparing((RpcQueueEntry entry) -> entry.entity().getUuid()),
+        queue.init(logExecutor, entries -> rpcUpdateRepository.update(entries),
+                Comparator.comparing(RpcEntity::getUuid),
                 Function.identity());
     }
 
@@ -99,13 +96,8 @@ public class JpaRpcDao extends JpaAbstractDao<RpcEntity, Rpc> implements RpcDao,
     }
 
     @Override
-    public ListenableFuture<Boolean> createAsync(Rpc rpc) {
-        return queue.add(RpcQueueEntry.forInsert(new RpcEntity(rpc)));
-    }
-
-    @Override
     public ListenableFuture<Boolean> updateAsync(Rpc rpc) {
-        return queue.add(RpcQueueEntry.forUpdate(new RpcEntity(rpc)));
+        return queue.add(new RpcEntity(rpc));
     }
 
     @Override
