@@ -106,6 +106,7 @@ export const HelpLinks = {
     oauth2Facebook: 'https://developers.facebook.com/docs/facebook-login/web#logindialog',
     oauth2Github: 'https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app',
     oauth2Google: 'https://developers.google.com/identity/protocols/oauth2',
+     oauth2DingTalk: 'https://open.dingtalk.com/document/development/obtain-the-access-token-of-an-internal-app',
     ruleEngine: `${helpBaseUrl}/docs${docPlatformPrefix}/user-guide/rule-engine-2-0/overview/`,
     ruleNodeCheckRelation: `${helpBaseUrl}/docs/user-guide/rule-engine-2-0/nodes/filter/check-relation-presence/`,
     ruleNodeCheckExistenceFields: `${helpBaseUrl}/docs/user-guide/rule-engine-2-0/nodes/filter/check-fields-presence/`,
